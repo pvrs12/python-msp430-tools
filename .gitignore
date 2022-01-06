@@ -22,3 +22,6 @@ examples/asm/forth_to_asm_advanced/*.map
 xxx.txt
 __pycache__
 python_msp430_tools.egg-info
+
+*.elf
+*.png

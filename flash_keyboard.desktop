@@ -1,0 +1,10 @@
+#!/usr/bin/env xdg-open
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Flash CMStore Keyboard
+Comment=A tool to change your wallpaper to the Bing image of the day
+Path=/home/pvares/git/personal/python-msp430-tools
+Exec=/home/pvares/git/personal/python-msp430-tools/flash_i_guess.sh
+Icon=/home/pvares/git/personal/python-msp430-tools/keyboard.png
+Terminal=true

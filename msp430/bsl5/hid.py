@@ -170,10 +170,19 @@ else:
                 self.hid_device = None
 
         def write_report(self, data):
+            log_str = []
+            for b in data:
+                log_str.append(hex(b).replace("0x", ""))
+            self.logger.info("SEND: %s", " ".join(log_str))
             os.write(self.hid_device, data)
 
         def read_report(self):
-            return os.read(self.hid_device, 64)
+            data = os.read(self.hid_device, 64)
+            log_str = []
+            for b in data:
+                log_str.append(hex(ord(b)).replace("0x", ""))
+            self.logger.info("RECV: %s", " ".join(log_str))
+            return data
 
 
 # and now back to multi-platform code
@@ -206,6 +215,14 @@ class HIDBSL5Target(HIDBSL5, msp430.target.Target):
             default=None,
             metavar="FILE")
 
+        group.add_option(
+            "--bsl-flash",
+            dest="bsl_flash",
+            action="store",
+            help="If true then flash BSL and exit",
+            default=None,
+        )
+
         self.parser.add_option_group(group)
 
     def close_connection(self):
@@ -219,51 +236,63 @@ class HIDBSL5Target(HIDBSL5, msp430.target.Target):
         self.use_fast_mode = True
         self.buffer_size = 48
 
-        if self.options.do_mass_erase:
-            self.logger.info("Mass erase...")
+        if self.options.bsl_flash:
+            self.logger.info("BSL Flash")
+            if self.options.do_mass_erase:
+                self.logger.info("Mass erase...")
+                try:
+                    self.BSL_RX_PASSWORD('\xff' * 30 + '\0' * 2)
+                except bsl5.BSL5Error:
+                    pass  # it will fail - that is our intention to trigger the erase
+                time.sleep(1)
+                # after erase, unlock device
+                self.BSL_RX_PASSWORD('\xff' * 32)
+                # remove mass_erase from action list so that it is not done
+                # twice
+                self.remove_action(self.mass_erase)
+            else:
+                if self.options.password is not None:
+                    password = msp430.memory.load(self.options.password).get_range(0xffe0, 0xffff)
+                    self.logger.info("Transmitting password: %s" % (str(password).encode('hex'),))
+                    self.BSL_RX_PASSWORD(password)
+
+            # download full BSL
+            if self.verbose:
+                sys.stderr.write('Download full BSL...\n')
+            full_bsl_txt = pkgutil.get_data('msp430.bsl5', 'RAM_BSL.00.06.05.34.txt')
+            full_bsl = msp430.memory.load('BSL', BytesIO(full_bsl_txt), format='titext')
+            self.program_file(full_bsl, quiet=True)
+
+            # Loading the PC can cause USB to stall and disconnect, causing a broken pipe.
+            # Handle the error gracefully and try to resume.
             try:
-                self.BSL_RX_PASSWORD('\xff' * 30 + '\0' * 2)
-            except bsl5.BSL5Error:
-                pass  # it will fail - that is our intention to trigger the erase
-            time.sleep(1)
-            # after erase, unlock device
-            self.BSL_RX_PASSWORD('\xff' * 32)
-            # remove mass_erase from action list so that it is not done
-            # twice
-            self.remove_action(self.mass_erase)
-        else:
-            if self.options.password is not None:
-                password = msp430.memory.load(self.options.password).get_range(0xffe0, 0xffff)
-                self.logger.info("Transmitting password: %s" % (str(password).encode('hex'),))
-                self.BSL_RX_PASSWORD(password)
+                self.BSL_LOAD_PC(0x2504)
+            except OSError as e:
+                self.logger.info("Caught " + str(e))
+            self.close()
 
-        # download full BSL
-        if self.verbose:
-            sys.stderr.write('Download full BSL...\n')
-        bsl_version_expected = (0x00, 0x06, 0x05, 0x34)
-        full_bsl_txt = pkgutil.get_data('msp430.bsl5', 'RAM_BSL.00.06.05.34.txt')
-        full_bsl = msp430.memory.load('BSL', BytesIO(full_bsl_txt), format='titext')
-        self.program_file(full_bsl, quiet=True)
-
-        # Loading the PC can cause USB to stall and disconnect, causing a broken pipe.
-        # Handle the error gracefully and try to resume.
-        try:
-            self.BSL_LOAD_PC(0x2504)
-        except OSError as e:
-            self.logger.info("Caught " + str(e))
-        self.close()
+            self.logger.warning("Exiting after programming BSL.")
+            # sys.exit(1)
+            to_remove = []
+            self.action_list = []
 
         # must re-initialize communication, BSL or USB system needs some time
-        # to be ready
-        self.logger.info("Waiting for BSL...")
-        time.sleep(3)
-        self.open(self.options.device)
-        # checking version, this is also a connection check
-        bsl_version = self.BSL_VERSION()
-        if bsl_version_expected != bsl_version:
-            self.logger.error("BSL version mismatch (continuing anyway)")
-        else:
-            self.logger.debug("BSL version OK")
+        # # to be ready
+        # for i in range(7, 0, -1):
+        #     self.logger.info("Waiting for BSL (%ss)...", i)
+        #     time.sleep(1)
+
+        if not self.options.bsl_flash:
+            self.logger.info("No BSL Flash")
+            bsl_version_expected = (0x00, 0x06, 0x05, 0x34)
+            self.open(self.options.device)
+            # checking version, this is also a connection check
+            bsl_version = self.BSL_VERSION()
+            print(bsl_version, bsl_version_expected)
+            if bsl_version_expected != bsl_version:
+                self.logger.error("BSL version mismatch (continuing anyway)")
+            else:
+                self.logger.debug("BSL version OK")
 
         #~ # Switch back to mode where we get ACKs
         #~ self.use_fast_mode = False
